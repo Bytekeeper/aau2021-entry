@@ -4,6 +4,10 @@ use rapier2d::prelude::*;
 use std::sync::RwLock;
 
 const PLAYER_ACCEL: f32 = 3000000.0;
+const PLAYER: u128 = 1;
+const WALL: u128 = 2;
+const BATTERY: u128 = 3;
+const HINT: u128 = 4;
 
 fn frand() -> f32 {
     rand() as f32 / u32::MAX as f32
@@ -12,9 +16,16 @@ fn frand() -> f32 {
 pub struct MyContact(ColliderHandle, ColliderHandle);
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum TileContent {
+    None,
+    Battery,
+    Hint,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Tile {
     Wall,
-    Floor { has_battery: bool },
+    Floor { content: TileContent },
 }
 
 #[derive(Debug)]
@@ -29,7 +40,9 @@ impl Map {
             for x in 1..99 {
                 let roll = gen_range(1, 100);
                 if roll > 55 {
-                    tiles[y][x] = Tile::Floor { has_battery: false };
+                    tiles[y][x] = Tile::Floor {
+                        content: TileContent::None,
+                    };
                 }
             }
         }
@@ -53,7 +66,13 @@ impl Map {
                         new_tiles[y][x] = Tile::Wall;
                     } else {
                         new_tiles[y][x] = Tile::Floor {
-                            has_battery: frand() > 0.99,
+                            content: if frand() > 0.99 {
+                                TileContent::Battery
+                            } else if frand() > 0.99 {
+                                TileContent::Hint
+                            } else {
+                                TileContent::None
+                            },
                         };
                     }
                 }
@@ -83,8 +102,10 @@ struct Contacts {
 
 impl EventHandler for Contacts {
     fn handle_intersection_event(&self, event: IntersectionEvent) {
-        let mut intersections = self.contacts.write().unwrap();
-        intersections.push(event);
+        if event.intersecting {
+            let mut intersections = self.contacts.write().unwrap();
+            intersections.push(event);
+        }
     }
     fn handle_contact_event(&self, _event: ContactEvent, _contact_pair: &ContactPair) {}
 }
@@ -134,6 +155,34 @@ enum GameState {
     EndScreen,
 }
 
+fn draw_text_box<'a>(
+    center: Option<Vec2>,
+    size: Vec2,
+    content: impl Iterator<Item = &'a str>,
+    action: &str,
+) {
+    let center = center.unwrap_or(vec2(screen_width() / 2.0, screen_height() / 2.0));
+    let tl = center - size / 2.0;
+    let rect = Rect::new(tl.x, tl.y, size.x, size.y);
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, BROWN);
+    for (i, s) in content.enumerate() {
+        draw_text(
+            s,
+            rect.x + 10.0,
+            rect.y + 40.0 + i as f32 * 30.0,
+            30.0,
+            DARKBROWN,
+        );
+    }
+    draw_text(
+        action,
+        rect.x + 10.0,
+        rect.bottom() - 10.0,
+        30.0,
+        DARKPURPLE,
+    );
+}
+
 #[macroquad::main("test")]
 async fn main() {
     info!("Setting up RNG");
@@ -181,19 +230,34 @@ async fn main() {
                 } else if conseq > 0 {
                     let collider = ColliderBuilder::cuboid(35.0 * conseq as f32, 35.0)
                         .translation(vector![(x * 2 - conseq) as f32 * 35.0, y as f32 * 70.0])
+                        .user_data(WALL)
                         .build();
                     physics.collider_set.insert(collider);
                     conseq = 0;
                 }
                 if x < 100 && conseq == 0 {
-                    if let Tile::Floor { has_battery } = map.tiles[y][x] {
-                        if has_battery {
-                            let collider = ColliderBuilder::round_cuboid(8.0, 3.0, 1.0)
-                                .translation(vector![x as f32 * 70.0 + 35.0, y as f32 * 70.0])
-                                .sensor(true)
-                                .active_events(ActiveEvents::INTERSECTION_EVENTS)
-                                .build();
-                            physics.collider_set.insert(collider);
+                    if let Tile::Floor { content } = map.tiles[y][x] {
+                        match content {
+                            TileContent::Battery => {
+                                let collider = ColliderBuilder::round_cuboid(8.0, 3.0, 1.0)
+                                    .translation(vector![x as f32 * 70.0 + 35.0, y as f32 * 70.0])
+                                    .sensor(true)
+                                    .active_events(ActiveEvents::INTERSECTION_EVENTS)
+                                    .user_data(BATTERY)
+                                    .build();
+                                physics.collider_set.insert(collider);
+                            }
+                            TileContent::Hint => {
+                                let collider = ColliderBuilder::cuboid(8.0, 8.0)
+                                    .translation(vector![x as f32 * 70.0 + 35.0, y as f32 * 70.0])
+                                    .rotation(std::f32::consts::PI * 2.0 * frand())
+                                    .sensor(true)
+                                    .active_events(ActiveEvents::INTERSECTION_EVENTS)
+                                    .user_data(HINT)
+                                    .build();
+                                physics.collider_set.insert(collider);
+                            }
+                            TileContent::None => (),
                         }
                     }
                     if player_start.is_none() {
@@ -209,7 +273,10 @@ async fn main() {
             .linear_damping(8.0)
             .lock_rotations()
             .build();
-        let collider = ColliderBuilder::cuboid(20.0, 30.0).friction(0.0).build();
+        let collider = ColliderBuilder::cuboid(20.0, 30.0)
+            .friction(0.0)
+            .user_data(PLAYER)
+            .build();
         let player_body = physics.rigid_body_set.insert(player_body);
         let player_collider_handle = physics.collider_set.insert_with_parent(
             collider,
@@ -233,10 +300,16 @@ async fn main() {
         let mut state = GameState::StartScreen;
 
         let mut stats_batteries = 0;
+        let mut stats_hints = 0;
         let mut stats_lifetime = 0.0;
 
         let subject_name = format!("#{}", rand() % 97861);
         let mut random_eye: Option<Vec2> = None;
+
+        let mut remaining_hints = HINTS.to_vec();
+        remaining_hints.shuffle();
+        let mut hint_timer = 0.0;
+        let mut hint = String::new();
 
         loop {
             let delta = get_frame_time();
@@ -295,16 +368,17 @@ async fn main() {
                 let center = Vec2::from_slice_unaligned(collider.translation().as_slice());
                 let dst = 20.0_f32.max(center.distance_squared(player_pos));
                 let alpha = 1.0_f32.min(20000.0 / dst);
-                if alpha < 0.01 {
+                if alpha < 0.1 {
                     return;
                 }
                 let rot = Mat2::from_angle(collider.rotation().angle());
 
                 if let Some(cuboid) = collider.shape().as_cuboid() {
-                    let color = if collider.parent().is_none() {
-                        Color::new(0.1, 0.1, 0.1, alpha)
-                    } else {
-                        Color::new(0.3, 0.0, 0.0, alpha)
+                    let color = match collider.user_data {
+                        WALL => Color::new(0.1, 0.1, 0.1, alpha),
+                        PLAYER => Color::new(0.3, 0.0, 0.0, alpha),
+                        HINT => Color::new(0.3, 0.3, 0.2, alpha),
+                        _ => panic!("Unhandled cuboid type"),
                     };
 
                     let extent = cuboid.half_extents;
@@ -318,6 +392,7 @@ async fn main() {
                 }
 
                 if let Some(round_cuboid) = collider.shape().as_round_cuboid() {
+                    debug_assert!(collider.user_data == BATTERY);
                     let color = Color::new(0.1, 0.7, 0.1, alpha);
                     let extent = round_cuboid.base_shape.half_extents;
                     let extent = vec2(extent.x, extent.y);
@@ -356,6 +431,7 @@ async fn main() {
             }
 
             // Render light
+            // Start flickering at around half energy being left
             let actual_light = if frand() < 2.0 * light_energy {
                 light_energy
             } else {
@@ -380,7 +456,7 @@ async fn main() {
 
             gl_use_default_material();
 
-            // Redraw player
+            // Redraw player to prevent it being affected by lighting
             match state {
                 GameState::Playing => {
                     draw_entity(&physics.collider_set[player_collider_handle], player_pos);
@@ -397,73 +473,50 @@ async fn main() {
             set_default_camera();
 
             match state {
+                GameState::Playing => {
+                    if hint_timer > 0.0 {
+                        draw_text_box(
+                            Some(vec2(screen_width() / 2.0, screen_height() - 80.0)),
+                            vec2(800.0, 160.0),
+                            hint.split("\n"),
+                            "",
+                        );
+                    }
+                }
                 GameState::EndScreen => {
-                    let rect = Rect::new(
-                        screen_width() / 2.0 - 200.0,
-                        screen_height() / 2.0 - 150.0,
-                        400.0,
-                        300.0,
-                    );
-                    draw_rectangle(rect.x, rect.y, rect.w, rect.h, BROWN);
-                    draw_text(
-                        &format!("Survived: {:.1} seconds", stats_lifetime),
-                        rect.x + 10.0,
-                        rect.y + 40.0,
-                        30.0,
-                        DARKBROWN,
-                    );
-                    draw_text(
-                        &format!("Batteries collected: {}", stats_batteries),
-                        rect.x + 10.0,
-                        rect.y + 70.0,
-                        30.0,
-                        DARKBROWN,
-                    );
-                    draw_text(
-                        "Press Space to retry",
-                        rect.x + 10.0,
-                        rect.bottom() - 10.0,
-                        30.0,
-                        DARKPURPLE,
+                    draw_text_box(
+                        None,
+                        vec2(600.0, 300.0),
+                        [
+                            format!("Survived: {:.1} seconds", stats_lifetime).as_str(),
+                            format!("Batteries collected: {}", stats_batteries).as_str(),
+                            format!("Messages read: {}", stats_hints).as_str(),
+                        ]
+                        .iter()
+                        .copied(),
+                        "Press Space/Click Mouse/Touch to retry",
                     );
                 }
                 GameState::StartScreen => {
-                    let rect = Rect::new(
-                        screen_width() / 2.0 - 300.0,
-                        screen_height() / 2.0 - 150.0,
-                        600.0,
-                        300.0,
-                    );
-                    draw_rectangle(rect.x, rect.y, rect.w, rect.h, BROWN);
-                    for (i, s) in [
-                        &format!("Welcome, Test-Subject {}", subject_name),
-                        "Your test today involves finding the exit",
-                        "in the maze prepared for you.",
-                        "The light we provide you needs a steady",
-                        "amount of batteries. Be sure to locate them",
-                        "while searching.",
-                        "It must not run out of juice.",
-                    ]
-                    .iter()
-                    .enumerate()
-                    {
-                        draw_text(
-                            s,
-                            rect.x + 10.0,
-                            rect.y + 40.0 + i as f32 * 30.0,
-                            30.0,
-                            DARKBROWN,
-                        );
-                    }
-                    draw_text(
-                        "Press Space to start",
-                        rect.x + 10.0,
-                        rect.bottom() - 10.0,
-                        30.0,
-                        DARKPURPLE,
+                    draw_text_box(
+                        None,
+                        vec2(600.0, 300.0),
+                        [
+                            &format!("Welcome, Test-Subject {}", subject_name),
+                            "Your test today involves finding the exit",
+                            "in the maze prepared for you.",
+                            "The light we provide you needs a steady",
+                            "amount of batteries. Be sure to locate them",
+                            "while searching.",
+                            "It must not run out of juice.",
+                            "(Use mouse/arrow keys/finger to move around)",
+                        ]
+                        .iter()
+                        .copied(),
+                        "Press Space/Click Mouse/Touch to start",
                     );
                 }
-                GameState::Playing | GameState::Death { .. } => {}
+                GameState::Death { .. } => {}
             }
 
             #[cfg(debug_assertions)]
@@ -483,36 +536,46 @@ async fn main() {
             // GAME LOGIC
             match state {
                 GameState::Playing => {
+                    hint_timer = (hint_timer - delta).max(0.0);
                     let mut move_force = Vector::new(0.0, 0.0);
                     if is_key_down(KeyCode::Left) {
-                        move_force += Vector::new(-PLAYER_ACCEL, 0.0);
+                        move_force += Vector::new(-1.0, 0.0);
                     }
                     if is_key_down(KeyCode::Right) {
-                        move_force += Vector::new(PLAYER_ACCEL, 0.0);
+                        move_force += Vector::new(1.0, 0.0);
                     }
                     if is_key_down(KeyCode::Up) {
-                        move_force += Vector::new(0.0, -PLAYER_ACCEL);
+                        move_force += Vector::new(0.0, -1.0);
                     }
                     if is_key_down(KeyCode::Down) {
-                        move_force += Vector::new(0.0, PLAYER_ACCEL);
+                        move_force += Vector::new(0.0, 1.0);
+                    }
+                    if is_mouse_button_down(MouseButton::Left) {
+                        let mp = mouse_position();
+                        let mp = camera.screen_to_world(vec2(mp.0, mp.1));
+                        let dv = mp - player_pos;
+                        move_force = vector![dv.x, dv.y];
                     }
                     if move_force.magnitude_squared() > 0.0 {
-                        player_body.apply_force(move_force, true);
+                        player_body.apply_force(move_force.normalize() * PLAYER_ACCEL, true);
                     }
                 }
                 GameState::EndScreen => {
-                    if is_key_pressed(KeyCode::Space) {
+                    if is_key_pressed(KeyCode::Space) || is_mouse_button_pressed(MouseButton::Left)
+                    {
                         break;
                     }
                 }
                 GameState::StartScreen => {
-                    if is_key_pressed(KeyCode::Space) {
+                    if is_key_pressed(KeyCode::Space) || is_mouse_button_pressed(MouseButton::Left)
+                    {
                         state = GameState::Playing;
                     }
                 }
                 GameState::Death { .. } => {}
             }
 
+            // PHYSICS
             phys_time += delta;
             while phys_time >= 1.0 / 60.0 {
                 physics.step();
@@ -530,17 +593,43 @@ async fn main() {
                 }
                 if collider1 == player_collider_handle {
                     // Check for battery
-                    if physics.collider_set[collider2].shape().shape_type()
-                        == ShapeType::RoundCuboid
-                    {
-                        light_energy = 1.0_f32.min(light_energy + 0.5);
-                        stats_batteries += 1;
-                        physics.collider_set.remove(
-                            collider2,
-                            &mut physics.island_manager,
-                            &mut physics.rigid_body_set,
-                            false,
-                        );
+                    match physics.collider_set.get(collider2).map(|c| c.user_data) {
+                        Some(BATTERY) => {
+                            light_energy = 1.0_f32.min(light_energy + 0.5);
+                            stats_batteries += 1;
+                            physics.collider_set.remove(
+                                collider2,
+                                &mut physics.island_manager,
+                                &mut physics.rigid_body_set,
+                                false,
+                            );
+                        }
+                        Some(HINT) => {
+                            // Add some very small amount (4 seconds), to not penalize players reading the
+                            // message
+                            light_energy = (light_energy + 0.2).min(1.0);
+                            stats_hints += 1;
+                            physics.collider_set[collider2]
+                                .set_active_events(ActiveEvents::default());
+                            hint_timer = 7.0;
+                            if remaining_hints.is_empty() || !hint.is_empty() && frand() < 0.2 {
+                                hint.clear();
+                                hint.push_str(HINTS_GARBAGE[gen_range(0, HINTS_GARBAGE.len() - 1)]);
+                            } else {
+                                let next_hint = remaining_hints.remove(remaining_hints.len() - 1);
+
+                                // FIRST message?
+                                if hint.is_empty() {
+                                    hint = format!(
+                                        "There is some kind of message on this pillar:\n{}",
+                                        next_hint
+                                    );
+                                } else {
+                                    hint = format!("It says:\n{}", next_hint);
+                                }
+                            }
+                        }
+                        _ => panic!("Unhandled collision"),
                     }
                 }
             }
@@ -557,7 +646,7 @@ async fn main() {
                     }
                     if light_energy <= 0.0 {
                         stop_sound(snd_heart_beat);
-                        state = GameState::Death { death_timer: 3.0 };
+                        state = GameState::Death { death_timer: 0.2 };
                     }
                 }
                 GameState::Death {
@@ -580,16 +669,39 @@ async fn main() {
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test() {
-        let map = Map::new();
+#[test]
+fn check_hints_length() {
+    for h in HINTS_GARBAGE.iter().flat_map(|s| s.split("\n")) {
+        assert!(h.len() < 52, "{}", h);
+    }
+    for h in HINTS.iter().flat_map(|s| s.split("\n")) {
+        assert!(h.len() < 52, "{}", h);
     }
 }
 
-// Stolen from old libgdx tutorial
+const HINTS_GARBAGE: &[&'static str] = &[
+    "I don't recognize the language on this pillar.",
+    "The text is heavily weathered, I can't read it.\nHow old is this place?",
+    "The pillar is broken where others had a message.",
+    "There is dried blood in this pillar.\nLet me out of here!",
+    "Oh my... there is fresh blood on this pillar!\nWho's there?",
+    "This pillar is messed up.\nIt looks thousands of years old.",
+];
+
+const HINTS: &[&'static str] = &[
+    "Something is here, I feel it watching me.\nI need to get out here!",
+    "How many of us died here?",
+    "The shadows are moving\nThe shadows are moving\nThe sha",
+    "I believe this is not a real place at all.\nSomething is off.",
+    "This is some kind of alternate reality.\nEverything feels strange.\nEven moving around.",
+    "What is wrong with that light.\nIt eats through batteries.\nWhat kind of joke is this?",
+    "Is this ... hell? It feels neither hot nor cold.\nThe walls ... they seem to watch me.",
+    "It feels as if I have walked these halls for hours.\nIs there even an exit?", // Hint: There is not :D
+    "All those pillars with messages.\nWho wrote them? Where are they?",
+    "There is some kind of beast here.\nI saw it moving in the shade. It vanished,\nwhen it tried to illuminate it."
+];
+
+// Stolen from an old libgdx tutorial: http://www.vodacek.zvb.cz/archiv/255.html
 const SHADOW_MAP_FRAG: &'static str = r#"#version 100
 #define PI 3.14
 #define resolution vec2(256, 256)
@@ -653,12 +765,10 @@ precision lowp float;
 
 //inputs from vertex shader
 varying vec2 uv;
-//varying LOWP vec4 vColor;
 
 //uniform values
 uniform sampler2D Texture;
 uniform lowp vec4 Color;
-//uniform vec2 resolution;
 
 //sample from the 1D distance map
 float sample(vec2 coord, float r) {
