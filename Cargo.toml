@@ -12,3 +12,7 @@ rapier2d = {version = "0.11"}
 [profile.dev.package.rapier2d]
 opt-level = 3
 codegen-units=1
+
+[profile.release]
+lto = true
+

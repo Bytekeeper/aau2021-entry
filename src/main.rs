@@ -395,11 +395,12 @@ async fn main() {
                     debug_assert!(collider.user_data == BATTERY);
                     let color = Color::new(0.1, 0.7, 0.1, alpha);
                     let extent = round_cuboid.base_shape.half_extents;
-                    let extent = vec2(extent.x, extent.y);
+                    let extent = vec2(extent.x - extent.y, extent.y);
                     let tl = rot.mul_vec2(-extent) + center;
                     let tr = rot.mul_vec2(vec2(1.0, -1.0) * extent) + center;
                     let br = rot.mul_vec2(extent) + center;
                     let bl = rot.mul_vec2(vec2(-1.0, 1.0) * extent) + center;
+                    let extent = vec2(extent.x + extent.y, extent.y);
                     let left = rot.mul_vec2(vec2(-1.0, 0.0) * extent) + center;
                     let right = rot.mul_vec2(vec2(1.0, 0.0) * extent) + center;
                     draw_triangle(tl, tr, br, color);
@@ -629,6 +630,7 @@ async fn main() {
                                 }
                             }
                         }
+                        None => (), // Double detect, removed in previous iteration
                         _ => panic!("Unhandled collision"),
                     }
                 }
