@@ -1,5 +1,5 @@
 # aau2021-entry
-Game [entry](https://bytekeeper.itch.io/the-mace) for [aau2021 game jam](https://itch.io/jam/aau-jam-fall-2021)
+Game [entry](https://bytekeeper.itch.io/the-mace) for [aau2021 game jam](https://itch.io/jam/aau-jam-fall-2021) and [Spooky 2D Jam '21](https://itch.io/jam/spooky-2d-jam-2021)
 
 # To play
 Either:
