@@ -36,11 +36,11 @@ pub struct Map {
 impl Map {
     fn new() -> Self {
         let mut tiles = vec![vec![Tile::Wall; 100]; 100];
-        for y in 1..99 {
-            for x in 1..99 {
+        for row in tiles.iter_mut().take(99).skip(1) {
+            for cell in row.iter_mut().take(99).skip(1) {
                 let roll = gen_range(1, 100);
                 if roll > 55 {
-                    tiles[y][x] = Tile::Floor {
+                    *cell = Tile::Floor {
                         content: TileContent::None,
                     };
                 }
@@ -110,8 +110,8 @@ impl EventHandler for Contacts {
     fn handle_contact_event(&self, _event: ContactEvent, _contact_pair: &ContactPair) {}
 }
 
-impl Physics {
-    pub fn new() -> Self {
+impl Default for Physics {
+    fn default() -> Self {
         Self {
             rigid_body_set: RigidBodySet::new(),
             collider_set: ColliderSet::new(),
@@ -127,7 +127,8 @@ impl Physics {
             },
         }
     }
-
+}
+impl Physics {
     pub fn step(&mut self) {
         let gravity = vector![0.0, 0.0];
         let physics_hooks = ();
@@ -161,7 +162,7 @@ fn draw_text_box<'a>(
     content: impl Iterator<Item = &'a str>,
     action: &str,
 ) {
-    let center = center.unwrap_or(vec2(screen_width() / 2.0, screen_height() / 2.0));
+    let center = center.unwrap_or_else(|| vec2(screen_width() / 2.0, screen_height() / 2.0));
     let tl = center - size / 2.0;
     let rect = Rect::new(tl.x, tl.y, size.x, size.y);
     draw_rectangle(rect.x, rect.y, rect.w, rect.h, BROWN);
@@ -217,7 +218,7 @@ async fn main() {
         info!("Starting new game");
 
         info!("Setting up physics");
-        let mut physics = Physics::new();
+        let mut physics = Physics::default();
 
         info!("Generating map");
         let map = Map::new();
@@ -292,7 +293,6 @@ async fn main() {
             PlaySoundParams {
                 looped: true,
                 volume: 0.0,
-                ..Default::default()
             },
         );
         let mut last_volume_change = 0.0;
@@ -479,7 +479,7 @@ async fn main() {
                         draw_text_box(
                             Some(vec2(screen_width() / 2.0, screen_height() - 80.0)),
                             vec2(800.0, 160.0),
-                            hint.split("\n"),
+                            hint.split('\n'),
                             "",
                         );
                     }
@@ -681,7 +681,7 @@ fn check_hints_length() {
     }
 }
 
-const HINTS_GARBAGE: &[&'static str] = &[
+const HINTS_GARBAGE: &[&str] = &[
     "I don't recognize the language on this pillar.",
     "The text is heavily weathered, I can't read it.\nHow old is this place?",
     "The pillar is broken where others had a message.",
@@ -690,7 +690,7 @@ const HINTS_GARBAGE: &[&'static str] = &[
     "This pillar is messed up.\nIt looks thousands of years old.",
 ];
 
-const HINTS: &[&'static str] = &[
+const HINTS: &[&str] = &[
     "Something is here, I feel it watching me.\nI need to get out here!",
     "How many of us died here?",
     "The shadows are moving\nThe shadows are moving\nThe sha",
@@ -704,7 +704,7 @@ const HINTS: &[&'static str] = &[
 ];
 
 // Stolen from an old libgdx tutorial: http://www.vodacek.zvb.cz/archiv/255.html
-const SHADOW_MAP_FRAG: &'static str = r#"#version 100
+const SHADOW_MAP_FRAG: &str = r#"#version 100
 #define PI 3.14
 #define resolution vec2(256, 256)
 precision lowp float;
@@ -748,7 +748,7 @@ void main(void) {
 }
 "#;
 
-const DEFAULT_VERTEX_SHADER: &'static str = r#"#version 100
+const DEFAULT_VERTEX_SHADER: &str = r#"#version 100
 attribute vec3 position;
 attribute vec2 texcoord;
 varying lowp vec2 uv;
@@ -760,7 +760,7 @@ void main() {
 }
 "#;
 
-const SHADOW_RENDER_FRAG_SHADER: &'static str = r#"#version 100
+const SHADOW_RENDER_FRAG_SHADER: &str = r#"#version 100
 #define PI 3.14
 #define resolution vec2(256, 256)
 precision lowp float;
